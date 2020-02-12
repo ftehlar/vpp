@@ -133,7 +133,7 @@ gmul_hi_lo (u8x16 a, u8x16 b)
 {
 #if defined (__PCLMUL__)
   return (u8x16) _mm_clmulepi64_si128 ((__m128i) a, (__m128i) b, 0x01);
-#elif defined (___ARM_FEATURE_CRYPTO)
+#elif defined (__ARM_FEATURE_CRYPTO)
   return (u8x16) vmull_p64 ((poly64_t) vget_high_p64 ((poly64x2_t) a),
 			    (poly64_t) vget_low_p64 ((poly64x2_t) b));
 #endif
