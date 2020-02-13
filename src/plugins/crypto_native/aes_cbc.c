@@ -300,7 +300,7 @@ more:
 		key_index[i] = ops[0]->key_index;
 		kd = (aes_cbc_key_data_t *) cm->key_data[key_index[i]];
 		for (j = 0; j < rounds + 1; j++)
-#if __x86_64__
+#if __VAES__
 		  k[j].x1[i] = kd->encrypt_key[j];
 #else
 		  k[j][i] = kd->encrypt_key[j];
@@ -342,28 +342,28 @@ more:
       aes_block_store_x4 (dst + 12, i, r.x4[3]);
 #else
 #if __x86_64__
-      r.x1[0] = u8x16_xor3 (r.x1[0], aes_block_load (src[0] + i), k[0].x1[0]);
-      r.x1[1] = u8x16_xor3 (r.x1[1], aes_block_load (src[1] + i), k[0].x1[1]);
-      r.x1[2] = u8x16_xor3 (r.x1[2], aes_block_load (src[2] + i), k[0].x1[2]);
-      r.x1[3] = u8x16_xor3 (r.x1[3], aes_block_load (src[3] + i), k[0].x1[3]);
+      r[0] = u8x16_xor3 (r[0], aes_block_load (src[0] + i), k[0][0]);
+      r[1] = u8x16_xor3 (r[1], aes_block_load (src[1] + i), k[0][1]);
+      r[2] = u8x16_xor3 (r[2], aes_block_load (src[2] + i), k[0][2]);
+      r[3] = u8x16_xor3 (r[3], aes_block_load (src[3] + i), k[0][3]);
 
       for (j = 1; j < rounds; j++)
 	{
-	  r.x1[0] = aes_enc_round (r.x1[0], k[j].x1[0]);
-	  r.x1[1] = aes_enc_round (r.x1[1], k[j].x1[1]);
-	  r.x1[2] = aes_enc_round (r.x1[2], k[j].x1[2]);
-	  r.x1[3] = aes_enc_round (r.x1[3], k[j].x1[3]);
+	  r[0] = aes_enc_round (r[0], k[j][0]);
+	  r[1] = aes_enc_round (r[1], k[j][1]);
+	  r[2] = aes_enc_round (r[2], k[j][2]);
+	  r[3] = aes_enc_round (r[3], k[j][3]);
 	}
 
-      r.x1[0] = aes_enc_last_round (r.x1[0], k[j].x1[0]);
-      r.x1[1] = aes_enc_last_round (r.x1[1], k[j].x1[1]);
-      r.x1[2] = aes_enc_last_round (r.x1[2], k[j].x1[2]);
-      r.x1[3] = aes_enc_last_round (r.x1[3], k[j].x1[3]);
+      r[0] = aes_enc_last_round (r[0], k[j][0]);
+      r[1] = aes_enc_last_round (r[1], k[j][1]);
+      r[2] = aes_enc_last_round (r[2], k[j][2]);
+      r[3] = aes_enc_last_round (r[3], k[j][3]);
 
-      aes_block_store (dst[0] + i, r.x1[0]);
-      aes_block_store (dst[1] + i, r.x1[1]);
-      aes_block_store (dst[2] + i, r.x1[2]);
-      aes_block_store (dst[3] + i, r.x1[3]);
+      aes_block_store (dst[0] + i, r[0]);
+      aes_block_store (dst[1] + i, r[1]);
+      aes_block_store (dst[2] + i, r[2]);
+      aes_block_store (dst[3] + i, r[3]);
 #else
       r[0] ^= aes_block_load(src[0] + i);
       r[1] ^= aes_block_load(src[1] + i);
