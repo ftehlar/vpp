@@ -38,7 +38,7 @@ typedef struct
 
 static_always_inline void __clib_unused
 aes_cbc_dec (u8x16 * k, u8x16u * src, u8x16u * dst, u8x16u * iv, int count,
-	     aes_key_size_t rounds)
+	     int rounds)
 {
   u8x16 r[4], c[4], f;
 
@@ -213,6 +213,7 @@ vaes_cbc_dec (u8x64 * k, u8x64u * src, u8x64u * dst, u8x16 * iv, int count,
     }
 }
 #endif
+#endif
 
 #ifdef __VAES__
 #define N 16
@@ -241,6 +242,7 @@ aes_ops_enc_aes_cbc (vlib_main_t * vm, vnet_crypto_op_t * ops[],
   vnet_crypto_key_index_t key_index[N];
   u8 *src[N] = { };
   u8 *dst[N] = { };
+#if __x86_64__
   /* *INDENT-OFF* */
   union
   {
@@ -248,6 +250,10 @@ aes_ops_enc_aes_cbc (vlib_main_t * vm, vnet_crypto_op_t * ops[],
     u8x64 x4[N / 4];
   } r = { }, k[15] = { };
   /* *INDENT-ON* */
+#else
+  u8x16 r[4] = { };
+  u8x16 k[15][4] = { };
+#endif
 
   for (i = 0; i < N; i++)
     key_index[i] = ~0;
@@ -267,12 +273,22 @@ more:
 	  {
 	    if (ops[0]->flags & VNET_CRYPTO_OP_FLAG_INIT_IV)
 	      {
+#if __x86_64__
 		r.x1[i] = ptd->cbc_iv[i];
 		*(u8x16u *) ops[0]->iv = r.x1[i];
 		ptd->cbc_iv[i] = aes_enc_round (r.x1[i], r.x1[i]);
+#else
+		r[i] = ptd->cbc_iv[i];
+		vst1q_u8 (ops[0]->iv, r[i]);
+		ptd->cbc_iv[i] = vaeseq_u8 (r[i], r[i]);
+#endif
 	      }
 	    else
+#if __x86_64__
 	      r.x1[i] = aes_block_load (ops[0]->iv);
+#else
+	      r[i] = vld1q_u8 (ops[0]->iv);
+#endif
 
 	    src[i] = ops[0]->src;
 	    dst[i] = ops[0]->dst;
@@ -284,7 +300,11 @@ more:
 		key_index[i] = ops[0]->key_index;
 		kd = (aes_cbc_key_data_t *) cm->key_data[key_index[i]];
 		for (j = 0; j < rounds + 1; j++)
+#if __x86_64__
 		  k[j].x1[i] = kd->encrypt_key[j];
+#else
+		  k[j][i] = kd->encrypt_key[j];
+#endif
 	      }
 	    ops[0]->status = VNET_CRYPTO_OP_STATUS_COMPLETED;
 	    n_left--;
@@ -298,6 +318,7 @@ more:
 
   for (i = 0; i < count; i += 16)
     {
+#if __x86_64__
 #ifdef __VAES__
       r.x4[0] = u8x64_xor3 (r.x4[0], aes_block_load_x4 (src, i), k[0].x4[0]);
       r.x4[1] = u8x64_xor3 (r.x4[1], aes_block_load_x4 (src, i), k[0].x4[1]);
@@ -344,94 +365,7 @@ more:
       aes_block_store (dst[2] + i, r.x1[2]);
       aes_block_store (dst[3] + i, r.x1[3]);
 #endif
-    }
-
-  for (i = 0; i < N; i++)
-    {
-      src[i] += count;
-      dst[i] += count;
-      len[i] -= count;
-    }
-
-  if (n_left > 0)
-    goto more;
-
-  if (!u32xN_is_all_zero (len & dummy_mask))
-    goto more;
-
-  return n_ops;
-}
-
-#endif
-#ifdef __aarch64__
-
-static_always_inline u32
-aes_ops_enc_aes_cbc (vlib_main_t * vm, vnet_crypto_op_t * ops[],
-		     u32 n_ops, aes_key_size_t ks)
-{
-  crypto_native_main_t *cm = &crypto_native_main;
-  crypto_native_per_thread_data_t *ptd =
-    vec_elt_at_index (cm->per_thread_data, vm->thread_index);
-  int rounds = AES_KEY_ROUNDS (ks);
-  u8 dummy[8192];
-  u32 i, j, count, n_left = n_ops;
-  u32x4 dummy_mask = { };
-  u32x4 len = { };
-  vnet_crypto_key_index_t key_index[4];
-  u8 *src[4] = { };
-  u8 *dst[4] = { };
-  u8x16 r[4] = { };
-  u8x16 k[15][4] = { };
-
-  for (i = 0; i < 4; i++)
-    key_index[i] = ~0;
-
-more:
-  for (i = 0; i < 4; i++)
-    if (len[i] == 0)
-      {
-	if (n_left == 0)
-	  {
-	    /* no more work to enqueue, so we are enqueueing dummy buffer */
-	    src[i] = dst[i] = dummy;
-	    len[i] = sizeof (dummy);
-	    dummy_mask[i] = 0;
-	  }
-	else
-	  {
-	    if (ops[0]->flags & VNET_CRYPTO_OP_FLAG_INIT_IV)
-	      {
-		r[i] = ptd->cbc_iv[i];
-		vst1q_u8 (ops[0]->iv, r[i]);
-		ptd->cbc_iv[i] = vaeseq_u8 (r[i], r[i]);
-	      }
-	    else
-	      r[i] = vld1q_u8 (ops[0]->iv);
-
-	    src[i] = ops[0]->src;
-	    dst[i] = ops[0]->dst;
-	    len[i] = ops[0]->len;
-	    dummy_mask[i] = ~0;
-	    if (key_index[i] != ops[0]->key_index)
-	      {
-		aes_cbc_key_data_t *kd;
-		key_index[i] = ops[0]->key_index;
-		kd = (aes_cbc_key_data_t *) cm->key_data[key_index[i]];
-		for (j = 0; j < rounds + 1; j++)
-		  k[j][i] = kd->encrypt_key[j];
-	      }
-	    ops[0]->status = VNET_CRYPTO_OP_STATUS_COMPLETED;
-	    n_left--;
-	    ops++;
-	  }
-      }
-
-  count = u32x4_min_scalar (len);
-
-  ASSERT (count % 16 == 0);
-
-  for (i = 0; i < count; i += 16)
-    {
+#else
       r[0] ^= vld1q_u8 (src[0] + i);
       r[1] ^= vld1q_u8 (src[1] + i);
       r[2] ^= vld1q_u8 (src[2] + i);
@@ -451,9 +385,10 @@ more:
       vst1q_u8 (dst[1] + i, r[1]);
       vst1q_u8 (dst[2] + i, r[2]);
       vst1q_u8 (dst[3] + i, r[3]);
+#endif
     }
 
-  for (i = 0; i < 4; i++)
+  for (i = 0; i < N; i++)
     {
       src[i] += count;
       dst[i] += count;
@@ -463,12 +398,12 @@ more:
   if (n_left > 0)
     goto more;
 
-  if (!u32x4_is_all_zero (len & dummy_mask))
+  if (!u32xN_is_all_zero (len & dummy_mask))
     goto more;
 
   return n_ops;
 }
-#endif
+
 
 static_always_inline u32
 aes_ops_dec_aes_cbc (vlib_main_t * vm, vnet_crypto_op_t * ops[],
