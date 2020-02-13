@@ -242,7 +242,7 @@ aes_ops_enc_aes_cbc (vlib_main_t * vm, vnet_crypto_op_t * ops[],
   vnet_crypto_key_index_t key_index[N];
   u8 *src[N] = { };
   u8 *dst[N] = { };
-#if __x86_64__
+#if __VAES__
   /* *INDENT-OFF* */
   union
   {
@@ -273,21 +273,21 @@ more:
 	  {
 	    if (ops[0]->flags & VNET_CRYPTO_OP_FLAG_INIT_IV)
 	      {
-#if __x86_64__
+#if __VAES__
 		r.x1[i] = ptd->cbc_iv[i];
 		*(u8x16u *) ops[0]->iv = r.x1[i];
 		ptd->cbc_iv[i] = aes_enc_round (r.x1[i], r.x1[i]);
 #else
 		r[i] = ptd->cbc_iv[i];
-		vst1q_u8 (ops[0]->iv, r[i]);
-		ptd->cbc_iv[i] = vaeseq_u8 (r[i], r[i]);
+		aes_block_store (ops[0]->iv, r[i]);
+		ptd->cbc_iv[i] = aes_enc_round (r[i], r[i]);
 #endif
 	      }
 	    else
-#if __x86_64__
+#if __VAES__
 	      r.x1[i] = aes_block_load (ops[0]->iv);
 #else
-	      r[i] = vld1q_u8 (ops[0]->iv);
+	      r[i] = aes_block_load (ops[0]->iv);
 #endif
 
 	    src[i] = ops[0]->src;
@@ -318,7 +318,6 @@ more:
 
   for (i = 0; i < count; i += 16)
     {
-#if __x86_64__
 #ifdef __VAES__
       r.x4[0] = u8x64_xor3 (r.x4[0], aes_block_load_x4 (src, i), k[0].x4[0]);
       r.x4[1] = u8x64_xor3 (r.x4[1], aes_block_load_x4 (src, i), k[0].x4[1]);
@@ -342,6 +341,7 @@ more:
       aes_block_store_x4 (dst + 8, i, r.x4[2]);
       aes_block_store_x4 (dst + 12, i, r.x4[3]);
 #else
+#if __x86_64__
       r.x1[0] = u8x16_xor3 (r.x1[0], aes_block_load (src[0] + i), k[0].x1[0]);
       r.x1[1] = u8x16_xor3 (r.x1[1], aes_block_load (src[1] + i), k[0].x1[1]);
       r.x1[2] = u8x16_xor3 (r.x1[2], aes_block_load (src[2] + i), k[0].x1[2]);
@@ -364,12 +364,11 @@ more:
       aes_block_store (dst[1] + i, r.x1[1]);
       aes_block_store (dst[2] + i, r.x1[2]);
       aes_block_store (dst[3] + i, r.x1[3]);
-#endif
 #else
-      r[0] ^= vld1q_u8 (src[0] + i);
-      r[1] ^= vld1q_u8 (src[1] + i);
-      r[2] ^= vld1q_u8 (src[2] + i);
-      r[3] ^= vld1q_u8 (src[3] + i);
+      r[0] ^= aes_block_load(src[0] + i);
+      r[1] ^= aes_block_load(src[1] + i);
+      r[2] ^= aes_block_load(src[2] + i);
+      r[3] ^= aes_block_load(src[3] + i);
       for (j = 0; j < rounds - 1; j++)
 	{
 	  r[0] = vaesmcq_u8 (vaeseq_u8 (r[0], k[j][0]));
@@ -381,10 +380,11 @@ more:
       r[1] = vaeseq_u8 (r[1], k[j][1]) ^ k[rounds][1];
       r[2] = vaeseq_u8 (r[2], k[j][2]) ^ k[rounds][2];
       r[3] = vaeseq_u8 (r[3], k[j][3]) ^ k[rounds][3];
-      vst1q_u8 (dst[0] + i, r[0]);
-      vst1q_u8 (dst[1] + i, r[1]);
-      vst1q_u8 (dst[2] + i, r[2]);
-      vst1q_u8 (dst[3] + i, r[3]);
+      aes_block_store (dst[0] + i, r[0]);
+      aes_block_store (dst[1] + i, r[1]);
+      aes_block_store (dst[2] + i, r[2]);
+      aes_block_store (dst[3] + i, r[3]);
+#endif
 #endif
     }
 
