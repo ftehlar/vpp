@@ -20,15 +20,36 @@ VLIB_REGISTER_LOG_CLASS (snort_log, static) = {
 #define log_err(fmt, ...)   vlib_log_err (snort_log.class, fmt, __VA_ARGS__)
 
 static void
+snort_freelist_init (u32 * fl)
+{
+  for (int j = 0; j < vec_len (fl); j++)
+    fl[j] = j;
+}
+
+static void
 snort_client_disconnect (clib_file_t *uf)
 {
+  vlib_main_t *vm = vlib_get_main ();
   snort_main_t *sm = &snort_main;
   snort_client_t *c = pool_elt_at_index (sm->clients, uf->private_data);
+  snort_qpair_t * qp;
+  u32 *bi;
 
   if (c->instance_index != ~0)
     {
       snort_instance_t *si =
 	pool_elt_at_index (sm->instances, c->instance_index);
+      qp = vec_elt_at_index (si->qpairs, vm->thread_index);
+
+      vec_foreach (bi, qp->buffer_indices)
+      {
+        if (bi[0] != ~0)
+        {
+          vlib_buffer_free (vm, bi, 1);
+          bi[0] = ~0;
+        }
+      }
+      snort_freelist_init (qp->freelist);
       si->client_index = ~0;
     }
 
@@ -179,7 +200,9 @@ snort_deq_ready (clib_file_t *uf)
 
   fformat (stderr, "event for instance %u on thread %u\n", uf->private_data,
 	   vm->thread_index);
-  read (uf->file_descriptor, &counter, sizeof (counter));
+  if (read (uf->file_descriptor, &counter, sizeof (counter)) < 0)
+    return clib_error_return (0, "client closed socket");
+
   clib_interrupt_set (ptd->interrupts, uf->private_data);
   vlib_node_set_interrupt_pending (vm, snort_deq_node.index);
   return 0;
@@ -213,6 +236,7 @@ snort_conn_fd_accept_ready (clib_file_t *uf)
   t.description = format (0, "snort client");
   c->file_index = clib_file_add (&file_main, &t);
 
+  log_debug ("snort_conn_fd_accept_ready: client %u", t.private_data);
   return 0;
 }
 
@@ -264,6 +288,9 @@ snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
   u32 qsz = 1 << log2_queue_sz;
   u8 align = CLIB_CACHE_LINE_BYTES;
 
+  if (snort_get_instance_by_name (name))
+    return clib_error_return (0, "instance already exists");
+
   /* descriptor table */
   qpair_mem_sz += round_pow2 (qsz * sizeof (daq_vpp_desc_t), align);
 
@@ -298,8 +325,6 @@ snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
       err = clib_error_return (0, "mmap failure");
       goto done;
     }
-
-  /* TODO check if instance altrady exists */
 
   pool_get_zero (sm->instances, si);
   si->index = si - sm->instances;
@@ -345,8 +370,7 @@ snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
 
       /* pre-populate freelist */
       vec_validate_aligned (qp->freelist, qsz - 1, CLIB_CACHE_LINE_BYTES);
-      for (int j = 0; j < qsz; j++)
-	qp->freelist[j] = j;
+      snort_freelist_init (qp->freelist);
 
       /* listen on dequeue events */
       t.read_function = snort_deq_ready;
@@ -382,16 +406,16 @@ snort_interface_enable_disable (vlib_main_t *vm, char *instance_name,
   vnet_main_t *vnm = vnet_get_main ();
   snort_instance_t *si;
   clib_error_t *err = 0;
-
-  if ((si = snort_get_instance_by_name (instance_name)) == 0)
-    {
-      err = clib_error_return (0, "unknown instance '%s'", instance_name);
-      goto done;
-    }
+  u32 index;
 
   if (is_enable)
     {
-      u32 index;
+      if ((si = snort_get_instance_by_name (instance_name)) == 0)
+        {
+          err = clib_error_return (0, "unknown instance '%s'", instance_name);
+          goto done;
+        }
+
       vec_validate_init_empty (sm->instance_by_sw_if_index, sw_if_index, ~0);
 
       index = sm->instance_by_sw_if_index[sw_if_index];
@@ -408,6 +432,25 @@ snort_interface_enable_disable (vlib_main_t *vm, char *instance_name,
 
       index = sm->instance_by_sw_if_index[sw_if_index] = si->index;
       vnet_feature_enable_disable ("ip4-unicast", "snort-enq", sw_if_index, 1,
+				   &index, sizeof (index));
+    }
+  else
+    {
+      if (sw_if_index >= vec_len (sm->instance_by_sw_if_index) ||
+          sm->instance_by_sw_if_index[sw_if_index] == ~0)
+      {
+        err = clib_error_return (0,
+                                 "interface %U is not assigned to snort "
+                                 "instance!",
+                                 format_vnet_sw_if_index_name, vnm, sw_if_index);
+        goto done;
+
+      }
+      index = sm->instance_by_sw_if_index[sw_if_index];
+      si = vec_elt_at_index (sm->instances, index);
+
+      sm->instance_by_sw_if_index[sw_if_index] = ~0;
+      vnet_feature_enable_disable ("ip4-unicast", "snort-enq", sw_if_index, 0,
 				   &index, sizeof (index));
     }
 
