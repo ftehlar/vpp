@@ -24,6 +24,7 @@ snort_create_instance_command_fn (vlib_main_t *vm, unformat_input_t *input,
   clib_error_t *err = 0;
   u8 *name = 0;
   u32 queue_size = 1024;
+  u8 drop_on_diconnect = 1;
 
   /* Get a line of input. */
   if (!unformat_user (input, unformat_line_input, line_input))
@@ -33,6 +34,10 @@ snort_create_instance_command_fn (vlib_main_t *vm, unformat_input_t *input,
     {
       if (unformat (line_input, "queue-size %u", &queue_size))
 	;
+      else if (unformat (line_input, "on-disconnect drop"))
+        drop_on_diconnect = 1;
+      else if (unformat (line_input, "on-disconnect pass"))
+        drop_on_diconnect = 0;
       else if (unformat (line_input, "name %s", &name))
 	;
       else
@@ -55,7 +60,8 @@ snort_create_instance_command_fn (vlib_main_t *vm, unformat_input_t *input,
       goto done;
     }
 
-  err = snort_instance_create (vm, (char *) name, min_log2 (queue_size));
+  err = snort_instance_create (vm, (char *) name, min_log2 (queue_size),
+      drop_on_diconnect);
 
 done:
   vec_free (name);
@@ -65,7 +71,8 @@ done:
 
 VLIB_CLI_COMMAND (snort_create_instance_command, static) = {
   .path = "snort create-instance",
-  .short_help = "snort create-instaince name <name> [queue-size <size>]",
+  .short_help = "snort create-instaince name <name> [queue-size <size>] "
+                "[on-disconnect drop|pass]",
   .function = snort_create_instance_command_fn,
 };
 

@@ -43,6 +43,7 @@ typedef struct
   int shm_fd;
   snort_qpair_t *qpairs;
   u8 *name;
+  u8 drop_on_disconnect;
 } snort_instance_t;
 
 typedef struct
@@ -94,7 +95,7 @@ typedef enum
 
 /* functions */
 clib_error_t *snort_instance_create (vlib_main_t *vm, char *name,
-				     u8 log2_queue_sz);
+				     u8 log2_queue_sz, u8 drop_on_disconnect);
 clib_error_t *snort_interface_enable_disable (vlib_main_t *vm,
 					      char *instance_name,
 					      u32 sw_if_index, int is_enable);

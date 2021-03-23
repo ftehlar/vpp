@@ -274,7 +274,8 @@ snort_listener_init (vlib_main_t *vm)
 }
 
 clib_error_t *
-snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
+snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz,
+    u8 drop_on_disconnect)
 {
   vlib_thread_main_t *tm = vlib_get_thread_main ();
   snort_main_t *sm = &snort_main;
@@ -333,6 +334,7 @@ snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
   si->shm_fd = fd;
   si->shm_size = size;
   si->name = format (0, "%s%c", name, 0);
+  si->drop_on_disconnect = drop_on_disconnect;
   index = si - sm->instances;
   hash_set_mem (sm->instance_by_name, si->name, index);
 
@@ -383,8 +385,8 @@ snort_instance_create (vlib_main_t *vm, char *name, u8 log2_queue_sz)
       clib_interrupt_resize (&ptd->interrupts, vec_len (sm->instances));
     }
 
-  vec_foreach_index (i, vlib_mains)
-    vlib_node_set_state (vlib_mains[i], snort_deq_node.index,
+  for (i = 0; i < vlib_get_n_threads (); i++)
+    vlib_node_set_state (vlib_get_main_by_index (i), snort_deq_node.index,
 			 VLIB_NODE_STATE_INTERRUPT);
 
 done:

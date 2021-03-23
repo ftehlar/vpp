@@ -38,6 +38,7 @@ format_snort_enq_trace (u8 *s, va_list *args)
 }
 
 #define foreach_snort_enq_error                                               \
+  _ (NO_INSTANCE, "no snort instance")                                        \
   _ (NO_ENQ_SLOTS, "no enqueue slots (packet dropped)")
 
 typedef enum
@@ -64,9 +65,10 @@ snort_enq_node_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
   u32 thread_index = vm->thread_index;
   u32 n_left = frame->n_vectors;
   u32 n_trace = 0;
-  u32 total_enq = 0;
+  u32 total_enq = 0, n_processed = 0;
   u32 *from = vlib_frame_vector_args (frame);
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE], **b = bufs;
+  u16 nexts[VLIB_FRAME_SIZE], *next = nexts;
 
   vlib_get_buffers (vm, from, bufs, n_left);
 
@@ -76,30 +78,53 @@ snort_enq_node_inline (vlib_main_t *vm, vlib_node_runtime_t *node,
       instance_index =
 	*(u32 *) vnet_feature_next_with_data (&next_index, b[0], sizeof (u32));
       si = vec_elt_at_index (sm->instances, instance_index);
-      qp = vec_elt_at_index (si->qpairs, thread_index);
-      n = qp->n_pending++;
-      daq_vpp_desc_t *d = qp->pending_descs + n;
 
-      qp->pending_nexts[n] = next_index;
-      qp->pending_buffers[n] = from[0];
+      /* if client isn't connected skip enqueue and take default action */
+      if (si->client_index == ~0)
+        {
+          if (si->drop_on_disconnect)
+            next[0] = SNORT_ENQ_NEXT_DROP;
+          else
+            next[0] = next_index;
+          next++;
+          n_processed++;
+        }
+      else
+        {
+          qp = vec_elt_at_index (si->qpairs, thread_index);
+          n = qp->n_pending++;
+          daq_vpp_desc_t *d = qp->pending_descs + n;
 
-      vlib_buffer_chain_linearize (vm, b[0]);
+          qp->pending_nexts[n] = next_index;
+          qp->pending_buffers[n] = from[0];
 
-      /* If this pkt is traced, snapshoot the data */
-      if (with_trace && b[0]->flags & VLIB_BUFFER_IS_TRACED)
-	n_trace++;
+          vlib_buffer_chain_linearize (vm, b[0]);
 
-      /* fill descriptor */
-      d->buffer_pool = b[0]->buffer_pool_index;
-      d->length = b[0]->current_length;
-      d->offset = (u8 *) b[0]->data + b[0]->current_data -
-		  sm->buffer_pool_base_addrs[d->buffer_pool];
-      d->address_space_id = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
+          /* If this pkt is traced, snapshoot the data */
+          if (with_trace && b[0]->flags & VLIB_BUFFER_IS_TRACED)
+            n_trace++;
+
+          /* fill descriptor */
+          d->buffer_pool = b[0]->buffer_pool_index;
+          d->length = b[0]->current_length;
+          d->offset = (u8 *) b[0]->data + b[0]->current_data -
+                      sm->buffer_pool_base_addrs[d->buffer_pool];
+          d->address_space_id = vnet_buffer (b[0])->sw_if_index[VLIB_RX];
+        }
 
       n_left--;
       from++;
       b++;
     }
+
+  if (n_processed)
+  {
+    vlib_node_increment_counter (vm, snort_enq_node.index,
+                                 SNORT_ENQ_ERROR_NO_INSTANCE,
+                                 n_processed);
+    vlib_buffer_enqueue_to_next (vm, node, vlib_frame_vector_args (frame),
+        nexts, n_processed);
+  }
 
   vec_foreach (si, sm->instances)
     {
